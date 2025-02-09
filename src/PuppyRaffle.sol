@@ -76,13 +76,19 @@ contract PuppyRaffle is ERC721, Ownable {
     /// @notice they have to pay the entrance fee * the number of players
     /// @notice duplicate entrants are not allowed
     /// @param newPlayers the list of players to enter the raffle
+    //@audit - could we spoof new players?, it says entrance fee * num of players, but we're multiplying by newPlayers?
     function enterRaffle(address[] memory newPlayers) public payable {
+        //Were custom reverts a thing in 0.7.6
         require(msg.value == entranceFee * newPlayers.length, "PuppyRaffle: Must send enough to enter raffle");
         for (uint256 i = 0; i < newPlayers.length; i++) {
             players.push(newPlayers[i]);
         }
 
         // Check for duplicates
+        //@audit - Does solidity not have hashmaps?
+        //@audit - DOS Exploit, an attacker looking to win the raffle could enter with a lot of accounts stopping the function from being
+        //entered in the future. The prices would need to be worth more than the entrance fee though, so this is a viable attack if the
+        //attacker wants to take down the system, and doesn't care too much about money
         for (uint256 i = 0; i < players.length - 1; i++) {
             for (uint256 j = i + 1; j < players.length; j++) {
                 require(players[i] != players[j], "PuppyRaffle: Duplicate player");
@@ -93,12 +99,17 @@ contract PuppyRaffle is ERC721, Ownable {
 
     /// @param playerIndex the index of the player to refund. You can find it externally by calling `getActivePlayerIndex`
     /// @dev This function will allow there to be blank spots in the array
+    //@audit - can I pass in another players index, no I cannot because of the 2nd require
+    //@audit - A reentrancy attack, is possible here, the last thing you should also ways updates your state before making calls to other contracts
     function refund(uint256 playerIndex) public {
+        //@audit - Prone to MEV
         address playerAddress = players[playerIndex];
         require(playerAddress == msg.sender, "PuppyRaffle: Only the player can refund");
         require(playerAddress != address(0), "PuppyRaffle: Player already refunded, or is not active");
 
         payable(msg.sender).sendValue(entranceFee);
+
+        //we can reenter before this change
 
         players[playerIndex] = address(0);
         emit RaffleRefunded(playerAddress);
@@ -113,6 +124,8 @@ contract PuppyRaffle is ERC721, Ownable {
                 return i;
             }
         }
+        //q what if a player is at index 0?
+        //@audit if the player is at index 0 they are not considered active
         return 0;
     }
 
@@ -122,20 +135,39 @@ contract PuppyRaffle is ERC721, Ownable {
     /// @dev we use a hash of on-chain data to generate the random numbers
     /// @dev we reset the active players array after the winner is selected
     /// @dev we send 80% of the funds to the winner, the other 20% goes to the feeAddress
+
+    //@audit This function uses weak randomness?
     function selectWinner() external {
         require(block.timestamp >= raffleStartTime + raffleDuration, "PuppyRaffle: Raffle not over");
         require(players.length >= 4, "PuppyRaffle: Need at least 4 players");
+        //@audit weak randomness
+        //fixes: Chainlink VRF, Commit Reveal Scheme
         uint256 winnerIndex =
             uint256(keccak256(abi.encodePacked(msg.sender, block.timestamp, block.difficulty))) % players.length;
         address winner = players[winnerIndex];
+        //@audit - We're prior to solidity 0.8.0 there are no overflow checks could this overflow?
         uint256 totalAmountCollected = players.length * entranceFee;
+
+        //q is the 80% correct?
         uint256 prizePool = (totalAmountCollected * 80) / 100;
         uint256 fee = (totalAmountCollected * 20) / 100;
+
+        //This is the total fees the owner should be able to collect.
+        //@audit overflow, totalFeel is uint64 while fees is unit256. In some raffle scenarioes totalFee would overflow. This is 
+        //possible because we're below version 0.8.0 of solidity. After using chisel command see that if we get more than 18eth in fees
+        //we will wrap to zero
+
+        //fixes: Newer version of solidity, or bigger units
+
+        //@audit unsafe cast of uint256 to uint64, fees bigger than 18.44... will overflow
         totalFees = totalFees + uint64(fee);
 
+        //e when we mint a new puppy NFT we use the totalSupply as the tokenID?
+        //q Where do we increment the total supply/total supply?
         uint256 tokenId = totalSupply();
 
         // We use a different RNG calculate from the winnerIndex to determine rarity
+        //@audit weak randomness
         uint256 rarity = uint256(keccak256(abi.encodePacked(msg.sender, block.difficulty))) % 100;
         if (rarity <= COMMON_RARITY) {
             tokenIdToRarity[tokenId] = COMMON_RARITY;
@@ -146,8 +178,11 @@ contract PuppyRaffle is ERC721, Ownable {
         }
 
         delete players;
-        raffleStartTime = block.timestamp;
+        raffleStartTime = block.timestamp; //new raffle started
         previousWinner = winner;
+
+        //@audit - possible reentrnacy, 
+        //@audit - what if the winner smart contract fall back method immediatedly revertes, we aren't allowed to pick a winndr?
         (bool success,) = winner.call{value: prizePool}("");
         require(success, "PuppyRaffle: Failed to send prize pool to winner");
         _safeMint(winner, tokenId);
@@ -155,9 +190,13 @@ contract PuppyRaffle is ERC721, Ownable {
 
     /// @notice this function will withdraw the fees to the feeAddress
     function withdrawFees() external {
+        //q so if the protocol has players someone can't withdraw fees.
+        //@audit - we can forcefully send eth to this contract by self-destructing another contract preventing fee withdrawa, we should have >=
         require(address(this).balance == uint256(totalFees), "PuppyRaffle: There are currently players active!");
         uint256 feesToWithdraw = totalFees;
         totalFees = 0;
+
+        //q what if fee Address is a smart contract that fails?
         (bool success,) = feeAddress.call{value: feesToWithdraw}("");
         require(success, "PuppyRaffle: Failed to withdraw fees");
     }

