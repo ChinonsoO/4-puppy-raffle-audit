@@ -162,6 +162,7 @@ contract PuppyRaffleTest is Test {
         assertEq(address(reEntrancyAttack).balance, 1e18 + entranceFee * 100);
 
     }
+    
 
     //////////////////////
     /// getActivePlayerIndex         ///
