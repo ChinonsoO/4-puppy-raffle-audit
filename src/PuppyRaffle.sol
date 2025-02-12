@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.7.6;
+pragma solidity ^0.7.6; 
+// @audit-info use of floating pragma is bad!!
+// @audit - also .... why are you using 0.7.6????
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -35,6 +37,7 @@ contract PuppyRaffle is ERC721, Ownable {
     mapping(uint256 => string) public rarityToName;
 
     // Stats for the common puppy (pug)
+    //@audit-gas variable should be constant to save GAS!!
     string private commonImageUri = "ipfs://QmSsYRx3LpDAb1GZQm7zZ1AuHZjfbPkD6J7s9r41xu1mf8";
     uint256 public constant COMMON_RARITY = 70;
     string private constant COMMON = "common";
@@ -59,6 +62,8 @@ contract PuppyRaffle is ERC721, Ownable {
     /// @param _raffleDuration the duration in seconds of the raffle
     constructor(uint256 _entranceFee, address _feeAddress, uint256 _raffleDuration) ERC721("Puppy Raffle", "PR") {
         entranceFee = _entranceFee;
+        //@audit-info chdck for zero address
+        //input validation
         feeAddress = _feeAddress;
         raffleDuration = _raffleDuration;
         raffleStartTime = block.timestamp;
@@ -79,6 +84,9 @@ contract PuppyRaffle is ERC721, Ownable {
     //@audit - could we spoof new players?, it says entrance fee * num of players, but we're multiplying by newPlayers?
     function enterRaffle(address[] memory newPlayers) public payable {
         //Were custom reverts a thing in 0.7.6
+    
+        //@audit-gas cache players.length so that we're not always making calls to storage with .length.
+
         require(msg.value == entranceFee * newPlayers.length, "PuppyRaffle: Must send enough to enter raffle");
         for (uint256 i = 0; i < newPlayers.length; i++) {
             players.push(newPlayers[i]);
@@ -112,6 +120,10 @@ contract PuppyRaffle is ERC721, Ownable {
         //we can reenter before this change
 
         players[playerIndex] = address(0);
+        // @audit-low 
+        //If an event can be manipulated
+        //An event is missing?
+        //An event is wrong
         emit RaffleRefunded(playerAddress);
     }
 
@@ -191,12 +203,13 @@ contract PuppyRaffle is ERC721, Ownable {
     /// @notice this function will withdraw the fees to the feeAddress
     function withdrawFees() external {
         //q so if the protocol has players someone can't withdraw fees.
-        //@audit - we can forcefully send eth to this contract by self-destructing another contract preventing fee withdrawa, we should have >=
+        //@audit - MISHANDLING ETH we can forcefully send eth to this contract by self-destructing another contract preventing fee withdrawal, we should have >=
         require(address(this).balance == uint256(totalFees), "PuppyRaffle: There are currently players active!");
         uint256 feesToWithdraw = totalFees;
         totalFees = 0;
 
         //q what if fee Address is a smart contract that fails?
+        //slither-disable-next-line arbitrary-send-eth
         (bool success,) = feeAddress.call{value: feesToWithdraw}("");
         require(success, "PuppyRaffle: Failed to withdraw fees");
     }
